@@ -1,0 +1,145 @@
+name: CI — Lint, Test, Security
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Monolith — Python FastAPI ─────────────────────────────────────────────
+  lint-monolith:
+    name: Lint Monolith (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/monolith
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: 'pip' }
+      - run: pip install ruff mypy types-bcrypt
+      - run: ruff check app/
+      - run: mypy app/ --ignore-missing-imports
+
+  test-monolith:
+    name: Test Monolith (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/monolith
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_DB:       testdb
+          POSTGRES_USER:     postgres
+          POSTGRES_PASSWORD: testpass
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+        ports: ['6379:6379']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: 'pip' }
+      - run: pip install -r requirements.txt -r requirements-test.txt
+      - name: Run migrations
+        run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:testpass@localhost:5432/testdb
+      - name: Run tests
+        run: pytest tests/ -v --cov=app --cov-report=xml --cov-report=term
+        env:
+          DATABASE_URL:     postgresql+asyncpg://postgres:testpass@localhost:5432/testdb
+          REDIS_URL:        redis://localhost:6379/0
+          JWT_PRIVATE_KEY:  ${{ secrets.TEST_JWT_PRIVATE_KEY }}
+          JWT_PUBLIC_KEY:   ${{ secrets.TEST_JWT_PUBLIC_KEY }}
+          ENVIRONMENT:      test
+      - uses: codecov/codecov-action@v4
+        with: { file: ./coverage.xml, flags: monolith }
+
+  # ── Telemetry Service — Go ────────────────────────────────────────────────
+  lint-test-telemetry:
+    name: Lint & Test Telemetry (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/telemetry
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22', cache: true }
+      - name: Download dependencies
+        run: go mod download
+      - name: Vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: services/telemetry
+      - name: Test with race detector
+        run: go test ./... -race -coverprofile=coverage.out -timeout 120s
+      - uses: codecov/codecov-action@v4
+        with: { file: ./coverage.out, flags: telemetry }
+
+  # ── Web Dashboard — Next.js ────────────────────────────────────────────────
+  lint-test-web:
+    name: Lint & Test Web Dashboard (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: apps/web/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --passWithNoTests
+
+  # ── Driver PWA — Vite/React ────────────────────────────────────────────────
+  lint-test-pwa:
+    name: Lint & Test Driver PWA
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/driver-pwa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: apps/driver-pwa/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --passWithNoTests
+
+  # ── Security Audit ────────────────────────────────────────────────────────
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install pip-audit
+      - run: pip-audit -r services/monolith/requirements.txt
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm audit --audit-level=high
+        working-directory: apps/web
+        continue-on-error: true   # Non-blocking for now; fails in production gate

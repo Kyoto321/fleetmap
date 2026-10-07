@@ -1,0 +1,48 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    env: 'fleet-platform'
+
+scrape_configs:
+  # ── Fleet Monolith ──────────────────────────────────────────────────────────
+  - job_name: 'fleet-monolith'
+    static_configs:
+      - targets: ['monolith:8000']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ── Fleet Telemetry Service ─────────────────────────────────────────────────
+  - job_name: 'fleet-telemetry'
+    static_configs:
+      - targets: ['telemetry:8080']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ── Nginx ───────────────────────────────────────────────────────────────────
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx-exporter:9113']
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # ── Kafka ───────────────────────────────────────────────────────────────────
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml

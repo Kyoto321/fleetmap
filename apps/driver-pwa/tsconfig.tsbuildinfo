@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/db/index.ts","./src/pages/jobdetail.tsx","./src/pages/joblist.tsx","./src/sync/background-sync.ts"],"version":"5.9.3"}
